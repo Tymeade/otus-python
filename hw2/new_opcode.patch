@@ -1,0 +1,110 @@
+From dc57cfa00559272cf2ed9f5cf47770783d8fc26a Mon Sep 17 00:00:00 2001
+From: Elizaveta <elizaveta530@gmail.com>
+Date: Thu, 7 Dec 2017 02:26:48 +0300
+Subject: [PATCH] new opcode
+
+---
+ Include/opcode.h        |  1 +
+ Lib/opcode.py           |  3 +++
+ Python/ceval.c          | 18 ++++++++++++++++++
+ Python/opcode_targets.h |  2 +-
+ Python/peephole.c       | 15 +++++++++++++++
+ 5 files changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/Include/opcode.h b/Include/opcode.h
+index 9ed5487..9611f3f 100644
+--- a/Include/opcode.h
++++ b/Include/opcode.h
+@@ -133,6 +133,7 @@ extern "C" {
+ #define LOAD_FAST	124	/* Local variable number */
+ #define STORE_FAST	125	/* Local variable number */
+ #define DELETE_FAST	126	/* Local variable number */
++#define LOAD_OTUS   127 /* Local variable number */
+ 
+ #define RAISE_VARARGS	130	/* Number of raise arguments (1, 2 or 3) */
+ /* CALL_FUNCTION_XXX opcodes defined below depend on this definition */
+diff --git a/Lib/opcode.py b/Lib/opcode.py
+index e403365..5763c8f 100644
+--- a/Lib/opcode.py
++++ b/Lib/opcode.py
+@@ -165,6 +165,9 @@ def_op('STORE_FAST', 125)       # Local variable number
+ haslocal.append(125)
+ def_op('DELETE_FAST', 126)      # Local variable number
+ haslocal.append(126)
++def_op('LOAD_OTUS', 127)        # Local variable number
++#haslocal.append(127)
++#hasconst.append(127)
+ 
+ def_op('RAISE_VARARGS', 130)    # Number of raise arguments (1, 2, or 3)
+ def_op('CALL_FUNCTION', 131)    # #args + (#kwargs << 8)
+diff --git a/Python/ceval.c b/Python/ceval.c
+index 4e4adc2..649ae09 100644
+--- a/Python/ceval.c
++++ b/Python/ceval.c
+@@ -1231,6 +1231,24 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
+             PUSH(x);
+             FAST_DISPATCH();
+         }
++        
++        TARGET(LOAD_OTUS)
++        {
++            //printf("eval %d ", (oparg >> 8) & 0xff);
++            x = GETLOCAL((oparg >> 8) & 0xff);
++            if (x != NULL) {
++                Py_INCREF(x);
++                PUSH(x);
++                x = GETITEM(consts, oparg & 0xff);
++				Py_INCREF(x);
++				PUSH(x);
++                FAST_DISPATCH();
++            }
++            format_exc_check_arg(PyExc_UnboundLocalError,
++                UNBOUNDLOCAL_ERROR_MSG,
++                PyTuple_GetItem(co->co_varnames, oparg));
++            break;
++        }
+ 
+         PREDICTED_WITH_ARG(STORE_FAST);
+         TARGET(STORE_FAST)
+diff --git a/Python/opcode_targets.h b/Python/opcode_targets.h
+index 95eb127..b4ad9ca 100644
+--- a/Python/opcode_targets.h
++++ b/Python/opcode_targets.h
+@@ -126,7 +126,7 @@ static void *opcode_targets[256] = {
+     &&TARGET_LOAD_FAST,
+     &&TARGET_STORE_FAST,
+     &&TARGET_DELETE_FAST,
+-    &&_unknown_opcode,
++    &&TARGET_LOAD_OTUS,
+     &&_unknown_opcode,
+     &&_unknown_opcode,
+     &&TARGET_RAISE_VARARGS,
+diff --git a/Python/peephole.c b/Python/peephole.c
+index 11f6f88..327fa4e 100644
+--- a/Python/peephole.c
++++ b/Python/peephole.c
+@@ -424,6 +424,21 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
+                 memset(codestr+i, NOP, 6);
+                 cumlc = 0;
+                 break;
++                
++                /* Combine LOAD_FAST and LOAD_CONST into LOAD_OTUS */
++            case LOAD_FAST:
++				j = GETARG(codestr, i);
++				Py_ssize_t k = GETARG(codestr, i + 3);
++				if (codestr[i+3] != LOAD_CONST || j > 255 || k > 255)
++					continue;
++				j = (j << 8) & 0xff00;
++				k = k & 0xff;
++				j = j | k;
++				SETARG(codestr, i, j);
++				codestr[i] = LOAD_OTUS;
++				memset(codestr + i + 3, NOP, 3);
++				cumlc = 0;			
++				break;
+ 
+                 /* Try to fold tuples of constants (includes a case for lists
+                    which are only used for "in" and "not in" tests).
+-- 
+2.7.4
+
